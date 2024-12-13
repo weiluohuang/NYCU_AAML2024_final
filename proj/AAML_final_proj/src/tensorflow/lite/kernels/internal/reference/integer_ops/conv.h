@@ -69,14 +69,16 @@ inline void ConvPerChannel(
 
   const int patch_size = filter_height * filter_width * filter_input_depth;
   const int patch_num = output_height * output_width;
-  // printf("patch_num: %d, patch_size: %d, output_depth: %d\n",patch_num,patch_size,output_depth);
+  const int32_t input_offset = params.input_offset;
+  printf("patch_num: %d, patch_size: %d, output_depth: %d\n",patch_num,patch_size,output_depth);
+  // printf("input offset: %ld\n",params.input_offset);
   int8_t im2col[1024][576];
   int8_t kernel[576][64];
   int32_t matmul[1024][64];
   // int32_t matmul_old[1024][64];
   for (int i = 0; i < patch_num; i++)
     for (int j = 0; j < patch_size; j++)
-        im2col[i][j] = -128;
+        im2col[i][j] = -input_offset;
   for (int out_y = 0; out_y < output_height; ++out_y) {
     const int in_y_origin = (out_y * stride_height) - pad_height;
     for (int out_x = 0; out_x < output_width; ++out_x) {
@@ -117,7 +119,7 @@ inline void ConvPerChannel(
   //   for (int j = 0; j < output_depth; ++j) {
   //     int32_t acc = 0;
   //     for (int k = 0; k < patch_size; ++k)
-  //       acc += (im2col[i][k] + 128) * kernel[k][j];
+  //       acc += (im2col[i][k] + input_offset) * kernel[k][j];
   //     matmul_old[i][j] = acc;
   //   }
   // }
@@ -125,8 +127,6 @@ inline void ConvPerChannel(
   const int tile_size = 64;
   const int32_t KMN = ((int32_t)patch_size << 21) | ((int32_t)tile_size << 9) | (int32_t)tile_size;
   // printf("KMN: %ld\n",KMN);
-  // printf("offset: %ld\n",128);
-  // printf("patch_num: %d, output_depth: %d, patch_size: %d\n",patch_num,output_depth,patch_size);
   for (int i = 0; i < patch_num; i += tile_size) {
     for (int j = 0; j < output_depth; j += tile_size) {
       for (int q = 0; q < tile_size; q += 4) {
@@ -135,7 +135,7 @@ inline void ConvPerChannel(
           cfu_op0(1, ((uint32_t)(uint8_t)kernel[k][j+q] << 24) | ((uint32_t)(uint8_t)kernel[k][j+q+1] << 16) | ((uint32_t)(uint8_t)kernel[k][j+q+2] << 8) | (uint32_t)(uint8_t)kernel[k][j+q+3], (q>>2)*patch_size+k);
         }
       }
-      cfu_op0(3, KMN, 128);
+      cfu_op0(3, KMN, input_offset);
       for (int m = 0; m < tile_size; ++m){
         for (int n = 0; n < tile_size; ++n){
           if(i+m < patch_num && j+n < output_depth){
@@ -159,7 +159,7 @@ inline void ConvPerChannel(
   //     cfu_op0(1, ((uint32_t)(uint8_t)kernel[i][j]<<24) | ((uint32_t)(uint8_t)kernel[i][j+1]<<16) | ((uint32_t)(uint8_t)kernel[i][j+2]<<8) | (uint32_t)(uint8_t)kernel[i][j+3], (j>>2)*patch_size+i);
   //   }
   // }
-  // cfu_op0(3, KMN, 128);
+  // cfu_op0(3, KMN, input_offset);
   // for (int i = 0; i < patch_num; ++i)
   //   for (int j = 0; j < output_depth; ++j){
   //     matmul[i][j] = cfu_op0(2, j % 4, (j >> 2) * patch_num + i);
