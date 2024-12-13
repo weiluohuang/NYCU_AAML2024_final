@@ -46,18 +46,12 @@ inline void ConvPerChannel(
   const int32_t output_activation_min = params.quantized_activation_min;
   const int32_t output_activation_max = params.quantized_activation_max;
 
-  // Consistency check.
-  TFLITE_DCHECK_LE(output_activation_min, output_activation_max);
-  TFLITE_DCHECK_EQ(input_shape.DimensionsCount(), 4);
-  TFLITE_DCHECK_EQ(filter_shape.DimensionsCount(), 4);
-  TFLITE_DCHECK_EQ(output_shape.DimensionsCount(), 4);
   const int input_depth = input_shape.Dims(3);
   const int output_depth = MatchingDim(filter_shape, 0, output_shape, 3);
   if (bias_data) {
     TFLITE_DCHECK_EQ(bias_shape.FlatSize(), output_depth);
   }
 
-  // Check dimensions of the tensors.
   const int input_height = input_shape.Dims(1);
   const int input_width = input_shape.Dims(2);
   const int filter_height = filter_shape.Dims(1);
@@ -71,14 +65,15 @@ inline void ConvPerChannel(
   const int patch_num = output_height * output_width;
   const int32_t input_offset = params.input_offset;
   printf("patch_num: %d, patch_size: %d, output_depth: %d\n",patch_num,patch_size,output_depth);
-  // printf("input offset: %ld\n",params.input_offset);
-  int8_t im2col[1024][576];
-  int8_t kernel[576][64];
-  int32_t matmul[1024][64];
+  printf("input offset: %ld\n",params.input_offset);
+  int8_t im2col[1024][324];
+  int8_t kernel[324][36];
+  int32_t matmul[1024][36];
   // int32_t matmul_old[1024][64];
-  for (int i = 0; i < patch_num; i++)
-    for (int j = 0; j < patch_size; j++)
-        im2col[i][j] = -input_offset;
+  // for (int i = 0; i < patch_num; i++)
+  //   for (int j = 0; j < patch_size; j++)
+  //       im2col[i][j] = -input_offset;
+  std::fill(&im2col[0][0], &im2col[0][0] + 1024 * 36, -input_offset);
   for (int out_y = 0; out_y < output_height; ++out_y) {
     const int in_y_origin = (out_y * stride_height) - pad_height;
     for (int out_x = 0; out_x < output_width; ++out_x) {
@@ -123,47 +118,48 @@ inline void ConvPerChannel(
   //     matmul_old[i][j] = acc;
   //   }
   // }
-  // const int tile_size = std::min(output_depth, patch_num);
-  const int tile_size = 64;
-  const int32_t KMN = ((int32_t)patch_size << 21) | ((int32_t)tile_size << 9) | (int32_t)tile_size;
-  // printf("KMN: %ld\n",KMN);
-  for (int i = 0; i < patch_num; i += tile_size) {
-    for (int j = 0; j < output_depth; j += tile_size) {
-      for (int q = 0; q < tile_size; q += 4) {
-        for (int k = 0; k < patch_size; ++k){
-          cfu_op0(0, ((uint32_t)(uint8_t)im2col[i+q][k] << 24) | ((uint32_t)(uint8_t)im2col[i+q+1][k] << 16) | ((uint32_t)(uint8_t)im2col[i+q+2][k] << 8) | (uint32_t)(uint8_t)im2col[i+q+3][k], (q>>2)*patch_size+k);
-          cfu_op0(1, ((uint32_t)(uint8_t)kernel[k][j+q] << 24) | ((uint32_t)(uint8_t)kernel[k][j+q+1] << 16) | ((uint32_t)(uint8_t)kernel[k][j+q+2] << 8) | (uint32_t)(uint8_t)kernel[k][j+q+3], (q>>2)*patch_size+k);
-        }
-      }
-      cfu_op0(3, KMN, input_offset);
-      for (int m = 0; m < tile_size; ++m){
-        for (int n = 0; n < tile_size; ++n){
-          if(i+m < patch_num && j+n < output_depth){
-            matmul[i+m][j+n] = cfu_op0(2, n % 4, (n >> 2) * tile_size + m);
-            // if(matmul[i+m][j+n] != matmul_old[i+m][j+n])
-            //   printf("i: %d,j: %d, predict : %ld, label : %ld\n",i+m,j+n,matmul[i+m][j+n], matmul_old[i+m][j+n]);
-          }
-        }
-      }
+
+  // const int tile_m = std::min(128, patch_num);
+  // const int tile_n = output_depth;
+  // const int32_t KMN = ((int32_t)patch_size << 21) | ((int32_t)tile_m << 9) | (int32_t)tile_n; //11, 12, 9
+  // // printf("KMN: %ld\n",KMN);
+  // for (int i = 0; i < patch_num; i += tile_m) {
+  //   for (int j = 0; j < output_depth; j += tile_n) {
+  //     for (int q = 0; q < tile_m; q += 4)
+  //       for (int k = 0; k < patch_size; ++k)
+  //         cfu_op0(0, ((uint32_t)(uint8_t)im2col[i+q][k] << 24) | ((uint32_t)(uint8_t)im2col[i+q+1][k] << 16) | ((uint32_t)(uint8_t)im2col[i+q+2][k] << 8) | (uint32_t)(uint8_t)im2col[i+q+3][k], (q>>2)*patch_size+k);
+  //     for (int q = 0; q < tile_n; q += 4)
+  //       for (int k = 0; k < patch_size; ++k)
+  //         cfu_op0(1, ((uint32_t)(uint8_t)kernel[k][j+q] << 24) | ((uint32_t)(uint8_t)kernel[k][j+q+1] << 16) | ((uint32_t)(uint8_t)kernel[k][j+q+2] << 8) | (uint32_t)(uint8_t)kernel[k][j+q+3], (q>>2)*patch_size+k);
+  //     cfu_op0(3, KMN, input_offset);
+  //     for (int m = 0; m < tile_m; ++m){
+  //       for (int n = 0; n < tile_n; ++n){
+  //         if(i+m < patch_num && j+n < output_depth){
+  //           matmul[i+m][j+n] = cfu_op0(2, n % 4, (n >> 2) * tile_m + m);
+  //           // if(matmul[i+m][j+n] != matmul_old[i+m][j+n])
+  //           //   printf("i: %d,j: %d, predict : %ld, label : %ld\n",i+m,j+n,matmul[i+m][j+n], matmul_old[i+m][j+n]);
+  //         }
+  //       }
+  //     }
+  //   }
+  // }
+
+  const int32_t KMN = ((int32_t)patch_size << 21) | ((int32_t)patch_num << 9) | (int32_t)output_depth;
+  for (int i = 0; i < patch_num; i += 4) {
+    for (int j = 0; j < patch_size; ++j) {
+      cfu_op0(0, ((uint32_t)(uint8_t)im2col[i][j]<<24) | ((uint32_t)(uint8_t)im2col[i+1][j]<<16) | ((uint32_t)(uint8_t)im2col[i+2][j]<<8) | (uint32_t)(uint8_t)im2col[i+3][j], (i>>2)*patch_size+j);
     }
   }
-
-  // const int32_t KMN = ((int32_t)patch_size << 21) | ((int32_t)patch_num << 9) | (int32_t)output_depth; //11, 12, 9
-  // for (int i = 0; i < patch_num; i += 4) {
-  //   for (int j = 0; j < patch_size; ++j) {
-  //     cfu_op0(0, ((uint32_t)(uint8_t)im2col[i][j]<<24) | ((uint32_t)(uint8_t)im2col[i+1][j]<<16) | ((uint32_t)(uint8_t)im2col[i+2][j]<<8) | (uint32_t)(uint8_t)im2col[i+3][j], (i>>2)*patch_size+j);
-  //   }
-  // }
-  // for (int j = 0; j < output_depth; j += 4) {
-  //   for (int i = 0; i < patch_size; ++i) {
-  //     cfu_op0(1, ((uint32_t)(uint8_t)kernel[i][j]<<24) | ((uint32_t)(uint8_t)kernel[i][j+1]<<16) | ((uint32_t)(uint8_t)kernel[i][j+2]<<8) | (uint32_t)(uint8_t)kernel[i][j+3], (j>>2)*patch_size+i);
-  //   }
-  // }
-  // cfu_op0(3, KMN, input_offset);
-  // for (int i = 0; i < patch_num; ++i)
-  //   for (int j = 0; j < output_depth; ++j){
-  //     matmul[i][j] = cfu_op0(2, j % 4, (j >> 2) * patch_num + i);
-  //   }
+  for (int j = 0; j < output_depth; j += 4) {
+    for (int i = 0; i < patch_size; ++i) {
+      cfu_op0(1, ((uint32_t)(uint8_t)kernel[i][j]<<24) | ((uint32_t)(uint8_t)kernel[i][j+1]<<16) | ((uint32_t)(uint8_t)kernel[i][j+2]<<8) | (uint32_t)(uint8_t)kernel[i][j+3], (j>>2)*patch_size+i);
+    }
+  }
+  cfu_op0(3, KMN, input_offset);
+  for (int i = 0; i < patch_num; ++i)
+    for (int j = 0; j < output_depth; ++j){
+      matmul[i][j] = cfu_op0(2, j % 4, (j >> 2) * patch_num + i);
+    }
 
   for (int out_y = 0; out_y < output_height; ++out_y) {
     for (int out_x = 0; out_x < output_width; ++out_x) {

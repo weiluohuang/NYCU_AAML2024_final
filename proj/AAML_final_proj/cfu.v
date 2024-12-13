@@ -27,8 +27,8 @@ module Cfu (
   input               clk
 );
   localparam A_bits = 15;
-  localparam B_bits = 15;
-  localparam C_bits = 10;
+  localparam B_bits = 14;
+  localparam C_bits = 13;
   wire A_wr_en = cmd_valid && cmd_ready && cmd_payload_function_id[4:3] == func_write_a;
   wire [A_bits-1:0]A_index = (state == STATE_CALC)? tpu_A_index:cmd_payload_inputs_1[A_bits-1:0];
   wire [A_bits-1:0]tpu_A_index;
