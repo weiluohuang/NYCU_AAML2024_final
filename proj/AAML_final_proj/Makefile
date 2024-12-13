@@ -47,4 +47,7 @@ DEFINES += INCLUDE_MODEL_MLCOMMONS_TINY_V01_IMGC
 # Uncomment this line to include the ASCII animated donut demo.
 # DEFINES += DONUT_DEMO
 
+export EXTRA_LITEX_ARGS
+#EXTRA_LITEX_ARGS ="--cpu-variant=generate+csrPluginConfig:all+cfu+iCacheSize:8192+dCacheSize:8192+prediction:dynamic"
+
 include ../proj.mk
