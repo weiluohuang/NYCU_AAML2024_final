@@ -1,3 +1,4 @@
+// Copyright 2024 Wei-Ming Huang
 
 module TPU(
     clk,
@@ -26,7 +27,6 @@ module TPU(
     C_data_out
 );
 
-
 input clk;
 input rst_n;
 input            in_valid;
@@ -50,10 +50,6 @@ output           C_wr_en;
 output [15:0]    C_index;
 output [127:0]   C_data_in;
 input  [127:0]   C_data_out;
-
-
-
-//* Implement your design here
 
 localparam A_bits = 15;
 localparam B_bits = 15;

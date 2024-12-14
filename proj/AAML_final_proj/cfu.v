@@ -1,5 +1,5 @@
 // Copyright 2021 The CFU-Playground Authors
-//
+// Copyright 2024 Wei-Ming Huang
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -29,11 +29,11 @@ module Cfu (
   localparam A_bits = 15;
   localparam B_bits = 14;
   localparam C_bits = 13;
-  wire A_wr_en = cmd_valid && cmd_ready && cmd_payload_function_id[4:3] == func_write_a;
+  wire A_wr_en = cmd_valid && cmd_ready && cmd_payload_function_id[5:3] == func_write_a;
   wire [A_bits-1:0]A_index = (state == STATE_CALC)? tpu_A_index:cmd_payload_inputs_1[A_bits-1:0];
   wire [A_bits-1:0]tpu_A_index;
   wire [31:0]A_data_out;
-  wire B_wr_en = cmd_valid && cmd_ready && cmd_payload_function_id[4:3] == func_write_b;
+  wire B_wr_en = cmd_valid && cmd_ready && cmd_payload_function_id[5:3] == func_write_b;
   wire [B_bits-1:0]B_index = (state == STATE_CALC)? tpu_B_index:cmd_payload_inputs_1[B_bits-1:0];
   wire [B_bits-1:0]tpu_B_index;
   wire [31:0]B_data_out;
@@ -44,7 +44,7 @@ module Cfu (
   wire [127:0]C_data_in;
   wire [127:0]C_data_out;
   wire tpu_busy;
-  wire tpu_valid = cmd_valid && cmd_ready && cmd_payload_function_id[4:3] == func_go;
+  wire tpu_valid = cmd_valid && cmd_ready && cmd_payload_function_id[5:3] == func_go;
   reg  [1:0]c_read_offset;
   global_buffer_bram #(.ADDR_BITS(A_bits))
   gbuff_A(
@@ -94,10 +94,12 @@ module Cfu (
     .C_data_in(C_data_in)
   );
 
-  localparam func_write_a = 2'd0;
-  localparam func_write_b = 2'd1;
-  localparam func_read_c = 2'd2;
-  localparam func_go = 2'd3;
+  localparam func_write_a  = 3'd0;
+  localparam func_write_b  = 3'd1;
+  localparam func_read_c   = 3'd2;
+  localparam func_go       = 3'd3;
+  localparam func_set_bias = 3'd4;
+  localparam func_set_MBQM = 3'd5;
 
   localparam STATE_IDLE = 2'd0;
   localparam STATE_CALC = 2'd1;
@@ -109,11 +111,12 @@ module Cfu (
   always @(*) begin
     case (state)
       STATE_IDLE: state_next = 
-      (cmd_valid && cmd_payload_function_id[4:3] == func_go)? STATE_CALC:
-      (cmd_valid && cmd_payload_function_id[4:3] == func_read_c)? STATE_READ:
+      (cmd_valid && cmd_payload_function_id[5:3] == func_go)?     STATE_CALC:
+      (cmd_valid && cmd_payload_function_id[5:3] == func_read_c)? STATE_READ:
                                                                   STATE_IDLE;
       STATE_CALC: state_next = tpu_busy? STATE_CALC:STATE_DONE;
-      STATE_READ: state_next =  STATE_DONE;
+      STATE_READ: state_next = STATE_DONE;
+      // STATE_READ: state_next = (read_counter == 3'd1)? STATE_DONE:STATE_READ;
       STATE_DONE: state_next = (rsp_valid && rsp_ready)? STATE_IDLE:STATE_DONE;
       default: state_next = STATE_IDLE;
     endcase
@@ -126,14 +129,50 @@ module Cfu (
       if(state == STATE_IDLE)begin
         c_read_offset <= cmd_payload_inputs_0[1:0];
         cmd_payload_inputs_1_reg <= cmd_payload_inputs_1;
+        read_counter <= 3'b0;
+        if(cmd_valid && cmd_payload_function_id[5:3] == func_set_bias)begin
+          bias_reg <= cmd_payload_inputs_0;
+          output_offset_reg <= cmd_payload_inputs_1;
+        end else if(cmd_valid && cmd_payload_function_id[5:3] == func_set_MBQM)begin
+          output_multiplier_reg <= cmd_payload_inputs_0;
+          output_shift_reg <= cmd_payload_inputs_1;
+        end
+      end else if(state == STATE_READ)begin
+        read_counter <= read_counter + 1'b1;
+        rsp_outputs_reg <= rsp_outputs;
+        product_unshift <= $signed(rsp_outputs_reg + bias_reg) * $signed(output_multiplier_reg);
       end
     end
   end
   assign cmd_ready = state == STATE_IDLE;
-  assign rsp_valid = state == STATE_DONE || A_wr_en || B_wr_en;
-  assign rsp_payload_outputs_0 =
+  assign rsp_valid = state == STATE_DONE || A_wr_en || B_wr_en
+  || (cmd_valid && cmd_ready && cmd_payload_function_id[5:3] == func_set_bias)
+  || (cmd_valid && cmd_ready && cmd_payload_function_id[5:3] == func_set_MBQM);
+  // assign rsp_payload_outputs_0 = ( final_product[31] && final_product < 32'hffffff80)? 32'h00000080:
+  //                                (!final_product[31] && final_product > 32'h0000007f)? 32'h0000007f:
+  //                                final_product;
+  assign rsp_payload_outputs_0 = (c_read_offset == 2'd0)? C_data_out[127:96]:
+                                 (c_read_offset == 2'd1)? C_data_out[95:64]:
+                                 (c_read_offset == 2'd2)? C_data_out[63:32]:
+                                                          C_data_out[31:0];
+
+  reg[31:0] bias_reg;
+  reg[31:0] output_offset_reg;
+  reg[31:0] output_multiplier_reg;
+  reg[31:0] output_shift_reg;
+  reg[2:0] read_counter;
+  wire[31:0] rsp_outputs =
   (c_read_offset == 2'd0)? C_data_out[127:96]:
   (c_read_offset == 2'd1)? C_data_out[95:64]:
   (c_read_offset == 2'd2)? C_data_out[63:32]:
                            C_data_out[31:0];
+  reg[31:0] rsp_outputs_reg;
+  reg[63:0] product_unshift;
+  wire[31:0] product_shifted = product_unshift[62:31];
+  wire round_down = product_shifted[output_shift_reg - 1'b1] && (!product_shifted[31] || (product_shifted[31] && |product_shifted[6:0]));
+  wire[31:0] product = round_down? (product_shifted >> output_shift_reg) + 1'b1:(product_shifted >> output_shift_reg);
+  wire[31:0] final_product = product + output_offset_reg;
+  //TODO: += bias, MultiplyByQuantizedMultiplier, += output_offset
+  //TODO: output_activation_min max
+
 endmodule
