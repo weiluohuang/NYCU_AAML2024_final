@@ -1,6 +1,5 @@
 /* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
    Copyright 2024 Wei-Ming Huang. All Rights Reserved.
-   Copyright 2023-2024 Chung-Yi Chen (Yeecy). All Rights Reserved.
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -17,7 +16,6 @@ limitations under the License.
 #define TENSORFLOW_LITE_KERNELS_INTERNAL_REFERENCE_INTEGER_OPS_CONV_H_
 
 #include <algorithm>
-#include <cstdio>
 #include <cfu.h>
 
 #include "tensorflow/lite/kernels/internal/common.h"
@@ -25,14 +23,6 @@ limitations under the License.
 
 namespace tflite {
 namespace reference_integer_ops {
-
-inline int32_t RDBPOT(int32_t x, int32_t exp) {
-  const int32_t mask = (1 << exp) - 1;
-  const int32_t remainder = x & mask;
-  const int32_t threshold = (mask >> 1) + (x >> 31);
-  return (x >> exp) + (remainder > threshold);
-  // +=1 if positive and round bit = 1, else if round and sticky bit = 1
-}
 
 // Fixed-point per-channel-quantization convolution reference kernel.
 inline void ConvPerChannel(
@@ -61,16 +51,11 @@ inline void ConvPerChannel(
   const int patch_size = filter_height * filter_width * filter_input_depth;
   const int patch_num = output_height * output_width;
   const int32_t input_offset = params.input_offset;
-  // printf("patch_num: %d, patch_size: %d, output_depth: %d\n",patch_num,patch_size,output_depth);
-  // printf("input offset: %ld\n",params.input_offset);
-  // printf("output offset: %ld\n",params.output_offset);
   int8_t im2col[1024][324];
   int8_t kernel[324][36];
-  int32_t matmul[1024][36];
   for (int i = 0; i < patch_num; i++)
     for (int j = 0; j < patch_size; j++)
         im2col[i][j] = -input_offset;
-  // std::fill(&im2col[0][0], &im2col[0][0] + 1024 * 324, -input_offset);
   for (int out_y = 0; out_y < output_height; ++out_y) {
     const int in_y_origin = (out_y * stride_height) - pad_height;
     for (int out_x = 0; out_x < output_width; ++out_x) {
@@ -107,28 +92,6 @@ inline void ConvPerChannel(
     }
   }
 
-  // const int tile_m = std::min(128, patch_num);
-  // const int tile_n = output_depth;
-  // const int32_t KMN = ((int32_t)patch_size << 21) | ((int32_t)tile_m << 9) | (int32_t)tile_n; //11, 12, 9
-  // // printf("KMN: %ld\n",KMN);
-  // for (int i = 0; i < patch_num; i += tile_m) {
-  //   for (int j = 0; j < output_depth; j += tile_n) {
-  //     for (int q = 0; q < tile_m; q += 4)
-  //       for (int k = 0; k < patch_size; ++k)
-  //         cfu_op0(0, ((uint32_t)(uint8_t)im2col[i+q][k] << 24) | ((uint32_t)(uint8_t)im2col[i+q+1][k] << 16) | ((uint32_t)(uint8_t)im2col[i+q+2][k] << 8) | (uint32_t)(uint8_t)im2col[i+q+3][k], (q>>2)*patch_size+k);
-  //     for (int q = 0; q < tile_n; q += 4)
-  //       for (int k = 0; k < patch_size; ++k)
-  //         cfu_op0(1, ((uint32_t)(uint8_t)kernel[k][j+q] << 24) | ((uint32_t)(uint8_t)kernel[k][j+q+1] << 16) | ((uint32_t)(uint8_t)kernel[k][j+q+2] << 8) | (uint32_t)(uint8_t)kernel[k][j+q+3], (q>>2)*patch_size+k);
-  //     cfu_op0(3, KMN, input_offset);
-  //     for (int m = 0; m < tile_m; ++m){
-  //       for (int n = 0; n < tile_n; ++n){
-  //         if(i+m < patch_num && j+n < output_depth)
-  //           matmul[i+m][j+n] = cfu_op0(2, n % 4, (n >> 2) * tile_m + m);
-  //       }
-  //     }
-  //   }
-  // }
-
   const int32_t KMN = ((int32_t)patch_size << 21) | ((int32_t)patch_num << 9) | (int32_t)output_depth;
   for (int i = 0; i < patch_num; i += 4) {
     for (int j = 0; j < patch_size; ++j) {
@@ -141,43 +104,14 @@ inline void ConvPerChannel(
     }
   }
   cfu_op0(3, KMN, input_offset);
-  for (int i = 0; i < patch_num; ++i){
-    for (int j = 0; j < output_depth; ++j){
-      matmul[i][j] = cfu_op0(2, j % 4, (j >> 2) * patch_num + i);
-    }
-  }
 
-  // for (int j = 0; j < output_depth; ++j){
-  //   cfu_op0(4, bias_data[j], output_offset);
-  //   cfu_op0(5, output_multiplier[j], output_shift[j]);
-  //   for(int out_y = 0; out_y < output_height; ++out_y){
-  //     for(int out_x = 0; out_x < output_width; ++out_x){
-  //       int i = out_y * output_width + out_x;
-  //       output_data[Offset(output_shape, 0, out_y, out_x, j)]
-  //       = static_cast<int8_t>(cfu_op0(2, j % 4, (j >> 2) * patch_num + i));
-  //     }
-  //   }
-  // }
-
-  for (int out_y = 0; out_y < output_height; ++out_y) {
-    for (int out_x = 0; out_x < output_width; ++out_x) {
-      for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
-        int32_t acc = matmul[out_y * output_width + out_x][out_channel];
-
-        if (bias_data) {
-          acc += bias_data[out_channel];
-        }
-
-        acc = RDBPOT(
-        (int32_t)(((int64_t)acc * (int64_t)output_multiplier[out_channel])
-        >> 31), -output_shift[out_channel]);
-
-        acc += output_offset;
-        acc = std::max(acc, static_cast<int32_t>(-128));
-        acc = std::min(acc,  static_cast<int32_t>(127));
-
-        output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] =
-            static_cast<int8_t>(acc);
+  for (int j = 0; j < output_depth; ++j){
+    cfu_op0(4, bias_data[j], output_offset);
+    cfu_op0(5, output_multiplier[j], output_shift[j]);
+    for(int out_y = 0; out_y < output_height; ++out_y){
+      for(int out_x = 0; out_x < output_width; ++out_x){
+        output_data[Offset(output_shape, 0, out_y, out_x, j)]
+        = static_cast<int8_t>(cfu_op0(2, out_y * output_width + out_x, j));
       }
     }
   }
