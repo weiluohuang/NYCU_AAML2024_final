@@ -166,7 +166,7 @@ module Cfu (
   reg[31:0] rsp_outputs_reg;
   reg[63:0] product_unshift;
   wire signed[31:0] product_shifted = product_unshift[62:31];
-  wire round_down = product_shifted[output_shift_reg - 1'b1] && (!product_shifted[31] || (product_shifted[31] && |product_shifted[6:0]));
+  wire round_down = product_shifted[output_shift_reg - 1'b1] && (!product_shifted[31] || (product_shifted[31] && (|product_shifted[5:0] || (product_shifted[6] && !output_shift_reg[0]))));
   wire[31:0] product = (product_shifted >>> output_shift_reg) + $signed({2'b0, round_down});
   wire[31:0] final_product = product + output_offset_reg;
 
